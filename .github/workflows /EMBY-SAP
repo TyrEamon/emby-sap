@@ -1,0 +1,151 @@
+name: Build & Deploy emby-nginx to SAP CF
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: "选择部署区域"
+        required: true
+        default: "US(free)"
+        type: choice
+        options:
+          - SG(free)
+          - US(free)
+      app_name:
+        description: "应用名称（可选，留空自动生成）"
+        required: false
+        default: ""
+      memory:
+        description: "内存（如 512M）"
+        required: false
+        default: "512M"
+      disk:
+        description: "磁盘（如 300M）"
+        required: false
+        default: "300M"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ${{ steps.out.outputs.image_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Normalize image name
+        id: prep
+        run: |
+          IMAGE="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.prep.outputs.image }}:latest
+            ${{ steps.prep.outputs.image }}:sha-${{ github.sha }}
+
+      - name: Export image ref
+        id: out
+        run: |
+          echo "image_ref=${{ steps.prep.outputs.image }}:sha-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-image
+    runs-on: ubuntu-latest
+    env:
+      INPUT_REGION: ${{ github.event.inputs.region }}
+      INPUT_APP_NAME: ${{ github.event.inputs.app_name }}
+      INPUT_MEMORY: ${{ github.event.inputs.memory }}
+      INPUT_DISK: ${{ github.event.inputs.disk }}
+      EMAIL: ${{ secrets.EMAIL }}
+      PASSWORD: ${{ secrets.PASSWORD }}
+      CF_ORG: ${{ secrets.CF_ORG }}
+      CF_SPACE: ${{ secrets.CF_SPACE }}
+    steps:
+      - name: Install CF CLI
+        run: |
+          wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/cloudfoundry-cli.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloudfoundry-cli.gpg] https://packages.cloudfoundry.org/debian stable main" \
+            | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
+          sudo apt-get update
+          sudo apt-get install -y cf8-cli
+          cf version
+
+      - name: Resolve region and app name
+        id: vars
+        run: |
+          case "$INPUT_REGION" in
+            "SG(free)") CF_API="https://api.cf.ap21.hana.ondemand.com" ;;
+            "US(free)") CF_API="https://api.cf.us10-001.hana.ondemand.com" ;;
+            *) echo "Unsupported region: $INPUT_REGION"; exit 1 ;;
+          esac
+
+          if [ -n "$INPUT_APP_NAME" ]; then
+            APP_NAME="$INPUT_APP_NAME"
+          else
+            SUFFIX=$(head /dev/urandom | tr -dc 'a-z0-9' | head -c 6)
+            APP_NAME="emby-nginx-$SUFFIX"
+          fi
+
+          echo "cf_api=$CF_API" >> "$GITHUB_OUTPUT"
+          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Login and target org/space
+        run: |
+          cf api "${{ steps.vars.outputs.cf_api }}"
+          cf auth "$EMAIL" "$PASSWORD"
+
+          ORG="$CF_ORG"
+          SPACE="$CF_SPACE"
+
+          if [ -z "$ORG" ]; then
+            ORG=$(cf orgs | tail -n +4 | awk 'NF{print $1; exit}')
+          fi
+          if [ -z "$SPACE" ]; then
+            SPACE=$(cf spaces | tail -n +4 | awk 'NF{print $1; exit}')
+          fi
+
+          if [ -z "$ORG" ] || [ -z "$SPACE" ]; then
+            echo "ORG/SPACE 为空，请设置仓库 Secrets: CF_ORG, CF_SPACE"
+            exit 1
+          fi
+
+          cf target -o "$ORG" -s "$SPACE"
+
+      - name: Deploy app
+        run: |
+          cf push "${{ steps.vars.outputs.app_name }}" \
+            --docker-image "${{ needs.build-image.outputs.image_ref }}" \
+            -m "$INPUT_MEMORY" \
+            -k "$INPUT_DISK" \
+            --health-check-type port
+
+      - name: Show app info
+        run: |
+          cf app "${{ steps.vars.outputs.app_name }}"
+          ROUTE=$(cf app "${{ steps.vars.outputs.app_name }}" | awk '/routes:/ {print $2}')
+          if [ -n "$ROUTE" ]; then
+            echo "URL: https://$ROUTE"
+          fi
