@@ -1,20 +1,32 @@
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen ${PORT};
     server_name _;
+    resolver 1.1.1.1 8.8.8.8 valid=300s ipv6=off;
 
-    location / {
-        return 200 "nginx proxy ok";
+    location = / {
         add_header Content-Type text/plain;
+        return 200 "nginx proxy ok";
     }
 
-    location /emby/ {
-        proxy_pass https://lite.cn2gias.uk/;
+    # /p/协议/域名/端口/后续路径
+    location ~ ^/p/(?<upstream_scheme>https|http)/(?<upstream_host>lite\.cn2gias\.uk|candytallymovie\.vip|meenjoy\.mebimmer\.de|mehot\.mebimmer\.de)/(?<upstream_port>443|8096|8920)(?<upstream_path>/.*)?$ {
+        proxy_pass $upstream_scheme://$upstream_host:$upstream_port$upstream_path$is_args$args;
+
         proxy_ssl_server_name on;
-        proxy_set_header Host lite.cn2gias.uk;
+        proxy_ssl_name $upstream_host;
 
         proxy_http_version 1.1;
+        proxy_set_header Host $upstream_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $connection_upgrade;
         proxy_set_header Range $http_range;
         proxy_set_header If-Range $http_if_range;
 
@@ -22,4 +34,6 @@ server {
         proxy_request_buffering off;
         proxy_read_timeout 3600s;
     }
+
+    location / { return 404; }
 }
