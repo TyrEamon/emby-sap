@@ -14,7 +14,7 @@ server {
     }
 
     # /p/协议/域名/端口/后续路径
-    location ~ ^/p/(?<upstream_scheme>https|http)/(?<upstream_host>lite\.cn2gias\.uk|candytallymovie\.vip|meenjoy\.mebimmer\.de|mehot\.mebimmer\.de)/(?<upstream_port>443|8096|8920)(?<upstream_path>/.*)?$ {
+    location ~ ^/p/(?<upstream_scheme>https|http)/(?<upstream_host>lite\.cn2gias\.uk|candytallymovie\.vip|meenjoy\.mebimmer\.de|mehot\.mebimmer\.de|emby\.levilde\.bond)/(?<upstream_port>443|8096|8920)(?<upstream_path>/.*)?$ {
         proxy_pass $upstream_scheme://$upstream_host:$upstream_port$upstream_path$is_args$args;
 
         proxy_ssl_server_name on;
