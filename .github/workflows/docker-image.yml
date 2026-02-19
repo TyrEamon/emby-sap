@@ -41,4 +41,4 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ steps.prep.outputs.image }}:latest
-            ghcr.io/${{ steps.prep.outputs.image }}:sha-${{ github.sha }}
+            ghcr.io/${{ steps.prep.outputs.image }}:sha-test
